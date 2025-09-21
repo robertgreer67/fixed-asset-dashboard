@@ -1,0 +1,2025 @@
+                            <div id="editMadeDate" class="text-gray-600">Not completed</div>
+                        </div>
+                        <div>
+                            <span class="font-medium">Installed:</span>
+                            <div id="editInstalledDate" class="text-gray-600">Not completed</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="flex justify-between items-center">
+                    <button onclick="deleteCurrentAsset()" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium">Delete Asset</button>
+                    <div class="flex gap-3">
+                        <button id="cancelEdit" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+                        <button id="saveEdit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+// Global variables - available immediately
+var assets = [];
+var filteredAssets = [];
+var currentPage = 1;
+var itemsPerPage = 20;
+var currentEditAsset = null;
+var selectedAsset = null;
+
+// Asset selection functions
+function selectAsset(uniqueRef) {
+    var asset = assets.find(function(a) { return a.uniqueRef === uniqueRef; });
+    if (!asset) return;
+    
+    selectedAsset = asset;
+    
+    // Update UI to show selection
+    var selectedAssetInfo = safeGetElement('selectedAssetInfo');
+    var deleteSelectedContainer = safeGetElement('deleteSelectedContainer');
+    
+    if (selectedAssetInfo) {
+        selectedAssetInfo.textContent = asset.uniqueRef + ' - ' + asset.type + ' (' + asset.elevation + ')';
+    }
+    
+    if (deleteSelectedContainer) {
+        deleteSelectedContainer.style.display = 'block';
+    }
+    
+    // Update visual highlighting
+    renderAssets();
+    
+    console.log('Asset selected:', asset.uniqueRef);
+}
+
+function clearSelection() {
+    selectedAsset = null;
+    
+    var deleteSelectedContainer = safeGetElement('deleteSelectedContainer');
+    if (deleteSelectedContainer) {
+        deleteSelectedContainer.style.display = 'none';
+    }
+    
+    renderAssets();
+    console.log('Selection cleared');
+}
+
+function deleteSelectedAsset() {
+    if (!selectedAsset) {
+        alert('No asset selected for deletion.');
+        return;
+    }
+
+    var confirmMessage = 'CONFIRM DELETION\n\n' +
+                        'You are about to permanently delete:\n\n' +
+                        'Asset Reference: ' + selectedAsset.uniqueRef + '\n' +
+                        'Type: ' + selectedAsset.type + '\n' +
+                        'Elevation: ' + selectedAsset.elevation + '\n' +
+                        (selectedAsset.qrCode ? 'QR Code: ' + selectedAsset.qrCode + '\n' : 'QR Code: Not assigned\n') +
+                        '\nThis action CANNOT be undone!\n\n' +
+                        'Are you sure you want to delete this asset?';
+
+    if (!confirm(confirmMessage)) {
+        console.log('Deletion cancelled by user');
+        return;
+    }
+
+    console.log('User confirmed deletion, proceeding...');
+    
+    var assetIndex = assets.findIndex(function(a) { return a.uniqueRef === selectedAsset.uniqueRef; });
+    console.log('Asset found at index:', assetIndex);
+    
+    if (assetIndex !== -1) {
+        var deletedAsset = assets.splice(assetIndex, 1)[0];
+        console.log('Asset deleted:', deletedAsset.uniqueRef);
+        
+        // Clear selection
+        selectedAsset = null;
+        var deleteSelectedContainer = safeGetElement('deleteSelectedContainer');
+        if (deleteSelectedContainer) {
+            deleteSelectedContainer.style.display = 'none';
+        }
+        
+        // Update filtered assets
+        filterAssets();
+        
+        // Reset pagination if current page is empty
+        var totalPages = Math.ceil(filteredAssets.length / itemsPerPage);
+        if (currentPage > totalPages && totalPages > 0) {
+            currentPage = totalPages;
+        } else if (totalPages === 0) {
+            currentPage = 1;
+        }
+        
+        // Update all displays
+        updateTypeFilter();
+        renderAssets();
+        updateStats();
+        updateElevationMatrix();
+        updateCounts();
+        
+        alert('SUCCESS: Asset "' + deletedAsset.uniqueRef + '" has been permanently deleted.');
+        console.log('Deletion completed successfully');
+    } else {
+        console.error('Asset not found in array for deletion');
+        alert('Error: Could not find asset to delete. Please try again.');
+    }
+}
+
+// Global functions - available immediately when page loads
+function showPage(pageId) {
+    console.log('showPage called with:', pageId);
+    document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
+    
+    var backBtn = document.getElementById('backBtn');
+    
+    if (pageId === 'front') {
+        var frontPage = document.getElementById('frontPage');
+        if (frontPage) frontPage.classList.add('active');
+        if (backBtn) backBtn.style.display = 'none';
+        updateElevationMatrix();
+    } else if (pageId === 'assets') {
+        var assetsPage = document.getElementById('assetsPage');
+        if (assetsPage) assetsPage.classList.add('active');
+        if (backBtn) backBtn.style.display = 'flex';
+        filterAssets();
+    }
+}
+
+function openImportModal() {
+    console.log('openImportModal called');
+    var importModal = document.getElementById('importModal');
+    if (importModal) {
+        importModal.classList.add('show');
+        console.log('Import modal opened');
+    } else {
+        console.error('Import modal not found');
+    }
+}
+
+function openAssetSearchModal() {
+    var assetSearchInput = document.getElementById('assetSearchInput');
+    var searchQrInput = document.getElementById('searchQrInput');
+    var searchResults = document.getElementById('searchResults');
+    var selectedAssetDisplay = document.getElementById('selectedAssetDisplay');
+    var assignSearchQR = document.getElementById('assignSearchQR');
+    var searchAssetModal = document.getElementById('searchAssetModal');
+    
+    if (assetSearchInput) assetSearchInput.value = '';
+    if (searchQrInput) searchQrInput.value = '';
+    if (searchResults) searchResults.classList.add('hidden');
+    if (selectedAssetDisplay) selectedAssetDisplay.classList.add('hidden');
+    if (assignSearchQR) assignSearchQR.disabled = true;
+    if (searchAssetModal) searchAssetModal.classList.add('show');
+    
+    setTimeout(function() {
+        if (assetSearchInput) assetSearchInput.focus();
+    }, 100);
+}
+
+function openQRModal() {
+    populateAssetSelect();
+    var qrCodeInput = document.getElementById('qrCodeInput');
+    var assetSelect = document.getElementById('assetSelect');
+    var currentAssignment = document.getElementById('currentAssignment');
+    var qrModal = document.getElementById('qrModal');
+    
+    if (qrCodeInput) qrCodeInput.value = '';
+    if (assetSelect) assetSelect.value = '';
+    if (currentAssignment) currentAssignment.classList.add('hidden');
+    if (qrModal) qrModal.classList.add('show');
+    
+    setTimeout(function() {
+        if (qrCodeInput) qrCodeInput.focus();
+    }, 100);
+}
+
+function addNewAsset() {
+    var newAsset = {
+        qrCode: 'QR-' + String(assets.length + 1).padStart(6, '0'),
+        type: 'Precast Panel',
+        elevation: 'Millbank',
+        uniqueRef: 'REF-' + String(assets.length + 1).padStart(6, '0'),
+        madeDate: null,
+        deliveredDate: null,
+        installedDate: null,
+        repairStatus: '',
+        length: 0,
+        depth: 0,
+        height: 0,
+        weight: 0,
+        notes: '',
+        L: 0,
+        B: 0,
+        H: 0,
+        createdDate: new Date(),
+        updatedDate: new Date()
+    };
+
+    assets.push(newAsset);
+    updateTypeFilter();
+    filterAssets();
+    updateStats();
+    updateElevationMatrix();
+    openEditModal(newAsset.uniqueRef);
+}
+
+function exportToCSV() {
+    var csvContent = 'QR_Code,Elevation,Reference,Made,Delivered,Installed,Repair_status,Length,Depth,Height,Weight(kg),Notes\n';
+    
+    assets.forEach(function(asset) {
+        var row = [
+            asset.qrCode || '',
+            asset.elevation || '',
+            asset.uniqueRef || '',
+            asset.madeDate ? asset.madeDate.toLocaleDateString('en-GB') : '',
+            asset.deliveredDate ? asset.deliveredDate.toLocaleDateString('en-GB') : '',
+            asset.installedDate ? asset.installedDate.toLocaleDateString('en-GB') : '',
+            asset.repairStatus || '',
+            asset.length || asset.L || '',
+            asset.depth || asset.B || '',
+            asset.height || asset.H || '',
+            asset.weight || '',
+            asset.notes || ''
+        ].join(',');
+        csvContent += row + '\n';
+    });
+
+    var blob = new Blob([csvContent], { type: 'text/csv' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'assets_' + new Date().toISOString().split('T')[0] + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+function toggleProgress(uniqueRef, stage) {
+    var assetIndex = assets.findIndex(function(a) { return a.uniqueRef === uniqueRef; });
+    if (assetIndex !== -1) {
+        var asset = assets[assetIndex];
+        var dateField = stage + 'Date';
+        
+        if (asset[dateField]) {
+            asset[dateField] = null;
+        } else {
+            asset[dateField] = new Date();
+        }
+        
+        asset.updatedDate = new Date();
+        renderAssets();
+        updateStats();
+        updateElevationMatrix();
+    }
+}
+
+function openEditModal(uniqueRef) {
+    var asset = assets.find(function(a) { return a.uniqueRef === uniqueRef; });
+    if (!asset) return;
+
+    currentEditAsset = asset;
+    
+    var editUniqueRef = document.getElementById('editUniqueRef');
+    var editQrCode = document.getElementById('editQrCode');
+    var editType = document.getElementById('editType');
+    var editElevation = document.getElementById('editElevation');
+    var editLength = document.getElementById('editLength');
+    var editDepth = document.getElementById('editDepth');
+    var editHeight = document.getElementById('editHeight');
+    var editWeight = document.getElementById('editWeight');
+    var editRepairStatus = document.getElementById('editRepairStatus');
+    var editNotes = document.getElementById('editNotes');
+    var editMadeDate = document.getElementById('editMadeDate');
+    var editInstalledDate = document.getElementById('editInstalledDate');
+    var editModal = document.getElementById('editModal');
+
+    if (editUniqueRef) editUniqueRef.value = asset.uniqueRef;
+    if (editQrCode) editQrCode.value = asset.qrCode;
+    if (editType) editType.value = asset.type;
+    if (editElevation) editElevation.value = asset.elevation;
+    if (editLength) editLength.value = asset.length || asset.L || 0;
+    if (editDepth) editDepth.value = asset.depth || asset.B || 0;
+    if (editHeight) editHeight.value = asset.height || asset.H || 0;
+    if (editWeight) editWeight.value = asset.weight || 0;
+    if (editRepairStatus) editRepairStatus.value = asset.repairStatus || '';
+    if (editNotes) editNotes.value = asset.notes || '';
+
+    if (editMadeDate) editMadeDate.textContent = formatDate(asset.madeDate) || 'Not completed';
+    if (editInstalledDate) editInstalledDate.textContent = formatDate(asset.installedDate) || 'Not completed';
+
+    if (editModal) editModal.classList.add('show');
+}
+
+function quickAssignQR(uniqueRef) {
+    openQRModal();
+    var assetSelect = document.getElementById('assetSelect');
+    if (assetSelect) {
+        assetSelect.value = uniqueRef;
+        updateCurrentAssignment();
+    }
+}
+
+function startQRScan() {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        if (isIOS()) {
+            var fileInput = document.createElement('input');
+            fileInput.type = 'file';
+            fileInput.accept = 'image/*';
+            fileInput.capture = 'environment';
+            
+            fileInput.onchange = function(e) {
+                var file = e.target.files[0];
+                if (file) {
+                    simulateQRScan(file, 'qrCodeInput');
+                }
+            };
+            
+            fileInput.click();
+        } else {
+            alert('To scan QR codes:\n\n1. Use your device\'s camera app\n2. Point at the QR code\n3. Copy the result\n4. Paste it in the manual input field below');
+        }
+    } else {
+        alert('Camera not available. Please enter the QR code manually.');
+    }
+}
+
+function startSearchQRScan() {
+    if (isIOS()) {
+        var fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'image/*';
+        fileInput.capture = 'environment';
+        
+        fileInput.onchange = function(e) {
+            var file = e.target.files[0];
+            if (file) {
+                simulateQRScan(file, 'searchQrInput');
+            }
+        };
+        
+        fileInput.click();
+    } else {
+        alert('To scan QR codes:\n\n1. Use your device\'s camera app\n2. Point at the QR code\n3. Copy the result\n4. Paste it in the manual input field below');
+    }
+}
+
+function selectAssetFromSearch(uniqueRef) {
+    var asset = assets.find(function(a) { return a.uniqueRef === uniqueRef; });
+    if (!asset) return;
+    
+    var selectedDisplay = document.getElementById('selectedAssetDisplay');
+    var selectedDetails = document.getElementById('selectedAssetDetails');
+    var searchResults = document.getElementById('searchResults');
+    var assetSearchInput = document.getElementById('assetSearchInput');
+    
+    if (selectedDetails) {
+        selectedDetails.innerHTML = 
+            '<strong>Reference:</strong> ' + asset.uniqueRef + '<br>' +
+            '<strong>Type:</strong> ' + asset.type + '<br>' +
+            '<strong>Elevation:</strong> ' + asset.elevation + '<br>' +
+            '<strong>Current QR:</strong> ' + (asset.qrCode || 'None assigned') + '<br>' +
+            '<strong>Dimensions:</strong> ' + (asset.L || asset.length) + ' × ' + (asset.B || asset.depth) + ' × ' + (asset.H || asset.height);
+    }
+    
+    if (selectedDisplay) {
+        selectedDisplay.classList.remove('hidden');
+        selectedDisplay.dataset.assetRef = uniqueRef;
+    }
+    
+    if (searchResults) searchResults.classList.add('hidden');
+    if (assetSearchInput) assetSearchInput.value = asset.uniqueRef;
+    
+    updateSearchAssignButton();
+}
+
+// Helper functions
+function safeGetElement(id) {
+    var element = document.getElementById(id);
+    if (!element) {
+        console.warn('Element with id "' + id + '" not found');
+        return null;
+    }
+    return element;
+}
+
+function safeSetInnerHTML(id, content) {
+    var element = safeGetElement(id);
+    if (element) {
+        element.innerHTML = content;
+    }
+}
+
+function safeSetTextContent(id, content) {
+    var element = safeGetElement(id);
+    if (element) {
+        element.textContent = content;
+    }
+}
+
+function updateElevationMatrix() {
+    var elevations = ['Millbank', 'Dean_Stanley', 'Smith_Square'];
+    var container = safeGetElement('elevationMatrix');
+    
+    if (!container) return;
+    
+    var totalAssets = 0;
+    var totalMadeCount = 0;
+    var totalDeliveredCount = 0;
+    var totalInstalledCount = 0;
+    
+    var matrixHTML = elevations.map(function(elevation) {
+        var elevationAssets = assets.filter(function(a) { return a.elevation === elevation; });
+        var totalCount = elevationAssets.length;
+        var madeCount = elevationAssets.filter(function(a) { return a.madeDate; }).length;
+        var deliveredCount = elevationAssets.filter(function(a) { return a.deliveredDate; }).length;
+        var installedCount = elevationAssets.filter(function(a) { return a.installedDate; }).length;
+        
+        var madePercent = totalCount > 0 ? Math.round((madeCount / totalCount) * 100) : 0;
+        var deliveredPercent = totalCount > 0 ? Math.round((deliveredCount / totalCount) * 100) : 0;
+        var installedPercent = totalCount > 0 ? Math.round((installedCount / totalCount) * 100) : 0;
+        
+        totalAssets += totalCount;
+        totalMadeCount += madeCount;
+        totalDeliveredCount += deliveredCount;
+        totalInstalledCount += installedCount;
+        
+        return '<tr class="border-b hover:bg-gray-50">' +
+                '<td class="p-4 font-semibold border border-gray-300 bg-gray-50">' + elevation + '</td>' +
+                '<td class="p-4 text-center font-medium border border-gray-300">' + totalCount + '</td>' +
+                '<td class="p-4 text-center font-bold text-green-700 border border-gray-300">' + madeCount + '</td>' +
+                '<td class="p-4 text-center font-bold text-green-700 border border-gray-300">' + madePercent + '%</td>' +
+                '<td class="p-4 text-center font-bold text-orange-700 border border-gray-300">' + deliveredCount + '</td>' +
+                '<td class="p-4 text-center font-bold text-orange-700 border border-gray-300">' + deliveredPercent + '%</td>' +
+                '<td class="p-4 text-center font-bold text-purple-700 border border-gray-300">' + installedCount + '</td>' +
+                '<td class="p-4 text-center font-bold text-purple-700 border border-gray-300">' + installedPercent + '%</td>' +
+                '</tr>';
+    }).join('');
+    
+    safeSetInnerHTML('elevationMatrix', matrixHTML);
+}
+
+function generateSampleData(count) {
+    count = count || 100;
+    var types = ['Precast Panel', 'Steel Beam', 'Column', 'Foundation Block', 'Roof Element'];
+    var elevations = ['Millbank', 'Dean_Stanley', 'Smith_Square'];
+    
+    var sampleAssets = [];
+    for (var i = 0; i < count; i++) {
+        sampleAssets.push({
+            qrCode: 'QR-' + String(i + 1).padStart(6, '0'),
+            type: types[Math.floor(Math.random() * types.length)],
+            elevation: elevations[Math.floor(Math.random() * elevations.length)],
+            uniqueRef: 'REF-' + String(i + 1).padStart(6, '0'),
+            madeDate: Math.random() > 0.5 ? new Date(2024, Math.floor(Math.random() * 12), Math.floor(Math.random() * 28) + 1) : null,
+            deliveredDate: Math.random() > 0.7 ? new Date(2024, Math.floor(Math.random() * 12), Math.floor(Math.random() * 28) + 1) : null,
+            installedDate: Math.random() > 0.8 ? new Date(2024, Math.floor(Math.random() * 12), Math.floor(Math.random() * 28) + 1) : null,
+            repairStatus: Math.random() > 0.9 ? ['Required', 'In Progress', 'Completed'][Math.floor(Math.random() * 3)] : '',
+            length: Math.floor(Math.random() * 500 + 100),
+            depth: Math.floor(Math.random() * 300 + 50),
+            height: Math.floor(Math.random() * 400 + 30),
+            weight: Math.round((Math.random() * 1000 + 50) * 10) / 10,
+            notes: Math.random() > 0.8 ? 'Sample note for asset ' + (i + 1) : '',
+            L: Math.floor(Math.random() * 500 + 100),
+            B: Math.floor(Math.random() * 300 + 50),
+            H: Math.floor(Math.random() * 400 + 30),
+            createdDate: new Date(),
+            updatedDate: new Date()
+        });
+    }
+    return sampleAssets;
+}
+
+function formatDate(date) {
+    if (!date) return '';
+    return date.toLocaleDateString('en-GB');
+}
+
+function getCompletionStatus(asset) {
+    var completed = [asset.madeDate, asset.deliveredDate, asset.installedDate].filter(function(d) { return d !== null; }).length;
+    if (completed === 3) return 'complete';
+    if (completed > 0) return 'partial';
+    return 'pending';
+}
+
+function renderAssets() {
+    var list = safeGetElement('assetList');
+    if (!list) return;
+    
+    var startIndex = (currentPage - 1) * itemsPerPage;
+    var endIndex = startIndex + itemsPerPage;
+    var pageAssets = filteredAssets.slice(startIndex, endIndex);
+
+    var assetsHTML = pageAssets.map(function(asset) {
+        var isSelected = selectedAsset && selectedAsset.uniqueRef === asset.uniqueRef;
+        var selectedClass = isSelected ? ' selected' : '';
+        
+        return '<div class="asset-row' + selectedClass + '" onclick="selectAsset(\'' + asset.uniqueRef + '\')">' +
+            '<div>' +
+                '<div class="font-semibold text-gray-900">' + (asset.uniqueRef || '') + '</div>' +
+                '<div class="text-sm text-gray-600">' + (asset.type || '') + '</div>' +
+                '<div class="text-sm text-gray-500">' + (asset.elevation || '') + '</div>' +
+                '<div class="text-xs text-gray-400">📱 ' + (asset.qrCode || '') + '</div>' +
+                (asset.weight ? '<div class="text-xs text-gray-400">⚖️ ' + asset.weight + 'kg</div>' : '') +
+            '</div>' +
+            '<div class="text-center text-sm text-gray-600 hidden sm:block">' +
+                'L: ' + (asset.length || asset.L || 0) + ' × D: ' + (asset.depth || asset.B || 0) + ' × H: ' + (asset.height || asset.H || 0) +
+                (asset.weight ? '<br>Weight: ' + asset.weight + 'kg' : '') +
+            '</div>' +
+            '<div class="grid grid-cols-3 gap-2 sm:gap-4 text-center">' +
+                '<div>' +
+                    '<div class="text-xs font-medium mb-1">Made</div>' +
+                    '<button class="progress-dot ' + (asset.madeDate ? 'completed' : 'pending') + '" onclick="event.stopPropagation(); toggleProgress(\'' + asset.uniqueRef + '\', \'made\')" title="' + (asset.madeDate ? 'Completed: ' + formatDate(asset.madeDate) : 'Click to mark complete') + '"></button>' +
+                    (asset.madeDate ? '<div class="text-xs text-gray-500 mt-1 hidden sm:block">' + formatDate(asset.madeDate) + '</div>' : '') +
+                '</div>' +
+                '<div>' +
+                    '<div class="text-xs font-medium mb-1">Delivered</div>' +
+                    '<button class="progress-dot ' + (asset.deliveredDate ? 'completed' : 'pending') + '" onclick="event.stopPropagation(); toggleProgress(\'' + asset.uniqueRef + '\', \'delivered\')" title="' + (asset.deliveredDate ? 'Completed: ' + formatDate(asset.deliveredDate) : 'Click to mark complete') + '"></button>' +
+                    (asset.deliveredDate ? '<div class="text-xs text-gray-500 mt-1 hidden sm:block">' + formatDate(asset.deliveredDate) + '</div>' : '') +
+                '</div>' +
+                '<div>' +
+                    '<div class="text-xs font-medium mb-1">Installed</div>' +
+                    '<button class="progress-dot ' + (asset.installedDate ? 'completed' : 'pending') + '" onclick="event.stopPropagation(); toggleProgress(\'' + asset.uniqueRef + '\', \'installed\')" title="' + (asset.installedDate ? 'Completed: ' + formatDate(asset.installedDate) : 'Click to mark complete') + '"></button>' +
+                    (asset.installedDate ? '<div class="text-xs text-gray-500 mt-1 hidden sm:block">' + formatDate(asset.installedDate) + '</div>' : '') +
+                '</div>' +
+            '</div>' +
+            '<div class="text-center">' +
+                '<button onclick="event.stopPropagation(); openEditModal(\'' + asset.uniqueRef + '\')" class="text-blue-600 hover:text-blue-800 text-sm font-medium mr-2" title="Edit Asset">✏️ Edit</button>' +
+                '<button onclick="event.stopPropagation(); quickAssignQR(\'' + asset.uniqueRef + '\')" class="text-green-600 hover:text-green-800 text-sm font-medium" title="Assign QR Code">🏷️ QR</button>' +
+            '</div>' +
+        '</div>';
+    }).join('');
+
+    safeSetInnerHTML('assetList', assetsHTML);
+    updatePagination();
+}
+
+function filterAssets() {
+    var searchInput = safeGetElement('searchInput');
+    var typeFilter = safeGetElement('typeFilter');
+    var elevationFilter = safeGetElement('elevationFilter');
+    var statusFilter = safeGetElement('statusFilter');
+    
+    var searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
+    var typeFilterValue = typeFilter ? typeFilter.value : '';
+    var elevationFilterValue = elevationFilter ? elevationFilter.value : '';
+    var statusFilterValue = statusFilter ? statusFilter.value : '';
+
+    filteredAssets = assets.filter(function(asset) {
+        var matchesSearch = asset.uniqueRef.toLowerCase().includes(searchTerm) ||
+                           asset.qrCode.toLowerCase().includes(searchTerm) ||
+                           asset.type.toLowerCase().includes(searchTerm);
+        
+        var matchesType = !typeFilterValue || asset.type === typeFilterValue;
+        var matchesElevation = !elevationFilterValue || asset.elevation === elevationFilterValue;
+        
+        var matchesStatus = true;
+        if (statusFilterValue) {
+            var status = getCompletionStatus(asset);
+            matchesStatus = status === statusFilterValue;
+        }
+        
+        return matchesSearch && matchesType && matchesElevation && matchesStatus;
+    });
+
+    currentPage = 1;
+    renderAssets();
+    updateCounts();
+}
+
+function updateStats() {
+    safeSetTextContent('totalAssets', assets.length.toString());
+    safeSetTextContent('madeCount', assets.filter(function(a) { return a.madeDate; }).length.toString());
+    safeSetTextContent('deliveredCount', assets.filter(function(a) { return a.deliveredDate; }).length.toString());
+    safeSetTextContent('installedCount', assets.filter(function(a) { return a.installedDate; }).length.toString());
+}
+
+function updateCounts() {
+    safeSetTextContent('totalCount', assets.length.toLocaleString());
+    safeSetTextContent('filteredCount', filteredAssets.length.toLocaleString());
+}
+
+function updateTypeFilter() {
+    var typeFilter = safeGetElement('typeFilter');
+    if (!typeFilter) return;
+    
+    var types = [];
+    assets.forEach(function(asset) {
+        if (types.indexOf(asset.type) === -1) {
+            types.push(asset.type);
+        }
+    });
+    
+    while (typeFilter.children.length > 1) {
+        typeFilter.removeChild(typeFilter.lastChild);
+    }
+    
+    types.forEach(function(type) {
+        var option = document.createElement('option');
+        option.value = type;
+        option.textContent = type;
+        typeFilter.appendChild(option);
+    });
+}
+
+function updatePagination() {
+    var totalPages = Math.ceil(filteredAssets.length / itemsPerPage);
+    var pageInfo = safeGetElement('pageInfo');
+    var prevBtn = safeGetElement('prevBtn');
+    var nextBtn = safeGetElement('nextBtn');
+
+    if (pageInfo) pageInfo.textContent = 'Page ' + currentPage + ' of ' + totalPages;
+    if (prevBtn) prevBtn.disabled = currentPage === 1;
+    if (nextBtn) nextBtn.disabled = currentPage === totalPages;
+}
+
+function populateAssetSelect() {
+    var select = safeGetElement('assetSelect');
+    if (!select) return;
+    
+    while (select.children.length > 1) {
+        select.removeChild(select.lastChild);
+    }
+    
+    var sortedAssets = assets.slice().sort(function(a, b) { return a.uniqueRef.localeCompare(b.uniqueRef); });
+    
+    sortedAssets.forEach(function(asset) {
+        var option = document.createElement('option');
+        option.value = asset.uniqueRef;
+        option.textContent = asset.uniqueRef + ' - ' + asset.type + ' (' + asset.elevation + ')';
+        select.appendChild(option);
+    });
+}
+
+function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+           (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function simulateQRScan(file, targetInputId) {
+    var timestamp = new Date().getTime();
+    var simulatedQR = 'QR-' + String(timestamp).slice(-6);
+    
+    var targetInput = safeGetElement(targetInputId);
+    if (targetInput) targetInput.value = simulatedQR;
+    
+    if (targetInputId === 'qrCodeInput') {
+        updateCurrentAssignment();
+    } else if (targetInputId === 'searchQrInput') {
+        updateSearchAssignButton();
+    }
+    
+    setTimeout(function() {
+        alert('QR Code scanned: ' + simulatedQR + '\n\nNote: In production, this would read the actual QR code from your camera.');
+    }, 500);
+}
+
+function updateCurrentAssignment() {
+    var scannedQR = safeGetElement('qrCodeInput');
+    var manualQR = safeGetElement('manualQrInput');
+    var assetRef = safeGetElement('assetSelect');
+    var assignmentDiv = safeGetElement('currentAssignment');
+    var detailsDiv = safeGetElement('assignmentDetails');
+    
+    if (!scannedQR || !manualQR || !assetRef || !assignmentDiv || !detailsDiv) return;
+    
+    var qrCode = scannedQR.value.trim() || manualQR.value.trim();
+    var assetRefValue = assetRef.value;
+    
+    if (qrCode && assetRefValue) {
+        var asset = assets.find(function(a) { return a.uniqueRef === assetRefValue; });
+        if (asset) {
+            assignmentDiv.classList.remove('hidden');
+            detailsDiv.innerHTML = 
+                '<strong>QR Code:</strong> ' + qrCode + '<br>' +
+                '<strong>Asset:</strong> ' + asset.uniqueRef + '<br>' +
+                '<strong>Type:</strong> ' + asset.type + '<br>' +
+                '<strong>Elevation:</strong> ' + asset.elevation +
+                (asset.qrCode && asset.qrCode !== qrCode ? '<br><span class="text-orange-600"><strong>Note:</strong> This will replace existing QR code: ' + asset.qrCode + '</span>' : '');
+        }
+    } else {
+        assignmentDiv.classList.add('hidden');
+    }
+}
+
+function updateSearchAssignButton() {
+    var scannedQR = safeGetElement('searchQrInput');
+    var manualQR = safeGetElement('manualSearchQrInput');
+    var selectedAsset = safeGetElement('selectedAssetDisplay');
+    var assignSearchQR = safeGetElement('assignSearchQR');
+    
+    if (!scannedQR || !manualQR || !selectedAsset || !assignSearchQR) return;
+    
+    var qrCode = scannedQR.value.trim() || manualQR.value.trim();
+    var selectedAssetRef = selectedAsset.dataset.assetRef;
+    
+    assignSearchQR.disabled = !qrCode || !selectedAssetRef;
+}
+
+function assignQRCode() {
+    var scannedQR = safeGetElement('qrCodeInput');
+    var manualQR = safeGetElement('manualQrInput');
+    var assetSelect = safeGetElement('assetSelect');
+    
+    if (!scannedQR || !manualQR || !assetSelect) return;
+    
+    var qrCode = scannedQR.value.trim() || manualQR.value.trim();
+    var assetRef = assetSelect.value;
+    
+    if (!qrCode) {
+        alert('Please scan or enter a QR code');
+        return;
+    }
+    
+    if (!assetRef) {
+        alert('Please select an asset');
+        return;
+    }
+    
+    var existingAsset = assets.find(function(a) { return a.qrCode === qrCode && a.uniqueRef !== assetRef; });
+    if (existingAsset) {
+        if (!confirm('QR code ' + qrCode + ' is already assigned to asset ' + existingAsset.uniqueRef + '. Do you want to reassign it?')) {
+            return;
+        }
+        existingAsset.qrCode = '';
+        existingAsset.updatedDate = new Date();
+    }
+    
+    var assetIndex = assets.findIndex(function(a) { return a.uniqueRef === assetRef; });
+    if (assetIndex !== -1) {
+        assets[assetIndex].qrCode = qrCode;
+        assets[assetIndex].updatedDate = new Date();
+        
+        renderAssets();
+        var qrModal = safeGetElement('qrModal');
+        if (qrModal) qrModal.classList.remove('show');
+        
+        var asset = assets[assetIndex];
+        alert('QR code ' + qrCode + ' successfully assigned to asset ' + asset.uniqueRef);
+    }
+}
+
+function performAssetSearch() {
+    var assetSearchInput = safeGetElement('assetSearchInput');
+    var resultsContainer = safeGetElement('searchResults');
+    
+    if (!assetSearchInput || !resultsContainer) return;
+    
+    var searchTerm = assetSearchInput.value.toLowerCase().trim();
+    
+    if (searchTerm.length < 2) {
+        resultsContainer.classList.add('hidden');
+        return;
+    }
+    
+    var searchResults = assets.filter(function(asset) {
+        return asset.uniqueRef.toLowerCase().includes(searchTerm) ||
+               asset.type.toLowerCase().includes(searchTerm) ||
+               asset.elevation.toLowerCase().includes(searchTerm) ||
+               asset.qrCode.toLowerCase().includes(searchTerm);
+    }).slice(0, 10);
+    
+    if (searchResults.length === 0) {
+        resultsContainer.innerHTML = '<div class="p-4 text-gray-500 text-center">No assets found</div>';
+        resultsContainer.classList.remove('hidden');
+        return;
+    }
+    
+    var resultsHTML = searchResults.map(function(asset) {
+        return '<div class="p-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0" onclick="selectAssetFromSearch(\'' + asset.uniqueRef + '\')">' +
+            '<div class="font-medium">' + asset.uniqueRef + '</div>' +
+            '<div class="text-sm text-gray-600">' + asset.type + ' - ' + asset.elevation + '</div>' +
+            '<div class="text-xs text-gray-500">QR: ' + asset.qrCode + '</div>' +
+        '</div>';
+    }).join('');
+    
+    resultsContainer.innerHTML = resultsHTML;
+    resultsContainer.classList.remove('hidden');
+}
+
+function assignQRFromSearch() {
+    var scannedQR = safeGetElement('searchQrInput');
+    var manualQR = safeGetElement('manualSearchQrInput');
+    var selectedAssetDisplay = safeGetElement('selectedAssetDisplay');
+    
+    if (!scannedQR || !manualQR || !selectedAssetDisplay) return;
+    
+    var qrCode = scannedQR.value.trim() || manualQR.value.trim();
+    var assetRef = selectedAssetDisplay.dataset.assetRef;
+    
+    if (!qrCode || !assetRef) return;
+    
+    var existingAsset = assets.find(function(a) { return a.qrCode === qrCode && a.uniqueRef !== assetRef; });
+    if (existingAsset) {
+        if (!confirm('QR code ' + qrCode + ' is already assigned to asset ' + existingAsset.uniqueRef + '. Do you want to reassign it?')) {
+            return;
+        }
+        existingAsset.qrCode = '';
+        existingAsset.updatedDate = new Date();
+    }
+    
+    var assetIndex = assets.findIndex(function(a) { return a.uniqueRef === assetRef; });
+    if (assetIndex !== -1) {
+        assets[assetIndex].qrCode = qrCode;
+        assets[assetIndex].updatedDate = new Date();
+        
+        renderAssets();
+        var searchAssetModal = safeGetElement('searchAssetModal');
+        if (searchAssetModal) searchAssetModal.classList.remove('show');
+        
+        alert('QR code ' + qrCode + ' successfully assigned to asset ' + assetRef);
+    }
+}
+
+function openEditModal(uniqueRef) {
+    var asset = assets.find(function(a) { return a.uniqueRef === uniqueRef; });
+    if (!asset) return;
+
+    currentEditAsset = asset;
+    
+    // Create a simple prompt-based edit system
+    var newRef = prompt('Asset Reference:', asset.uniqueRef);
+    if (newRef === null) return; // User cancelled
+    
+    var newQR = prompt('QR Code:', asset.qrCode);
+    if (newQR === null) return;
+    
+    var newType = prompt('Type:', asset.type);
+    if (newType === null) return;
+    
+    var newElevation = prompt('Elevation (Millbank/Dean_Stanley/Smith_Square):', asset.elevation);
+    if (newElevation === null) return;
+    
+    var newLength = prompt('Length (cm):', asset.length || asset.L || 0);
+    if (newLength === null) return;
+    
+    var newDepth = prompt('Depth (cm):', asset.depth || asset.B || 0);
+    if (newDepth === null) return;
+    
+    var newHeight = prompt('Height (cm):', asset.height || asset.H || 0);
+    if (newHeight === null) return;
+    
+    var newWeight = prompt('Weight (kg):', asset.weight || 0);
+    if (newWeight === null) return;
+    
+    var newRepairStatus = prompt('Repair Status (Required/In Progress/Completed or leave blank):', asset.repairStatus || '');
+    if (newRepairStatus === null) return;
+    
+    var newNotes = prompt('Notes:', asset.notes || '');
+    if (newNotes === null) return;
+    
+    // Update the asset
+    var assetIndex = assets.findIndex(function(a) { return a.uniqueRef === uniqueRef; });
+    if (assetIndex !== -1) {
+        assets[assetIndex].uniqueRef = newRef;
+        assets[assetIndex].qrCode = newQR;
+        assets[assetIndex].type = newType;
+        assets[assetIndex].elevation = newElevation;
+        assets[assetIndex].length = parseFloat(newLength) || 0;
+        assets[assetIndex].depth = parseFloat(newDepth) || 0;
+        assets[assetIndex].height = parseFloat(newHeight) || 0;
+        assets[assetIndex].weight = parseFloat(newWeight) || 0;
+        assets[assetIndex].repairStatus = newRepairStatus;
+        assets[assetIndex].notes = newNotes;
+        
+        // Keep backward compatibility
+        assets[assetIndex].L = assets[assetIndex].length;
+        assets[assetIndex].B = assets[assetIndex].depth;
+        assets[assetIndex].H = assets[assetIndex].height;
+        assets[assetIndex].updatedDate = new Date();
+        
+        // Update displays
+        updateTypeFilter();
+        filterAssets();
+        updateStats();
+        updateElevationMatrix();
+        
+        alert('Asset "' + assets[assetIndex].uniqueRef + '" has been updated successfully.');
+    }
+}
+
+function closeEditModal() {
+    var editModal = safeGetElement('editModal');
+    if (editModal) editModal.style.display = 'none';
+    currentEditAsset = null;
+    console.log('Edit modal closed');
+}
+
+function saveEdit() {
+    console.log('Save edit function called');
+    
+    if (!currentEditAsset) {
+        console.error('No asset is currently being edited');
+        alert('No asset is currently being edited.');
+        return;
+    }
+
+    console.log('Current edit asset:', currentEditAsset.uniqueRef);
+
+    var assetIndex = assets.findIndex(function(a) { return a.uniqueRef === currentEditAsset.uniqueRef; });
+    if (assetIndex === -1) {
+        console.error('Asset not found for updating');
+        alert('Asset not found for updating.');
+        return;
+    }
+
+    console.log('Asset found at index:', assetIndex);
+
+    try {
+        // Get form values
+        var editUniqueRef = safeGetElement('editUniqueRef');
+        var editQrCode = safeGetElement('editQrCode');
+        var editType = safeGetElement('editType');
+        var editElevation = safeGetElement('editElevation');
+        var editLength = safeGetElement('editLength');
+        var editDepth = safeGetElement('editDepth');
+        var editHeight = safeGetElement('editHeight');
+        var editWeight = safeGetElement('editWeight');
+        var editRepairStatus = safeGetElement('editRepairStatus');
+        var editNotes = safeGetElement('editNotes');
+        
+        console.log('Form elements found, updating asset...');
+        
+        // Update asset with new values
+        if (editUniqueRef) assets[assetIndex].uniqueRef = editUniqueRef.value;
+        if (editQrCode) assets[assetIndex].qrCode = editQrCode.value;
+        if (editType) assets[assetIndex].type = editType.value;
+        if (editElevation) assets[assetIndex].elevation = editElevation.value;
+        if (editLength) assets[assetIndex].length = parseFloat(editLength.value) || 0;
+        if (editDepth) assets[assetIndex].depth = parseFloat(editDepth.value) || 0;
+        if (editHeight) assets[assetIndex].height = parseFloat(editHeight.value) || 0;
+        if (editWeight) assets[assetIndex].weight = parseFloat(editWeight.value) || 0;
+        if (editRepairStatus) assets[assetIndex].repairStatus = editRepairStatus.value;
+        if (editNotes) assets[assetIndex].notes = editNotes.value;
+        
+        // Keep backward compatibility
+        assets[assetIndex].L = assets[assetIndex].length;
+        assets[assetIndex].B = assets[assetIndex].depth;
+        assets[assetIndex].H = assets[assetIndex].height;
+        assets[assetIndex].updatedDate = new Date();
+
+        console.log('Asset updated, refreshing displays...');
+
+        // Update displays
+        updateTypeFilter();
+        filterAssets();
+        updateStats();
+        updateElevationMatrix();
+        
+        console.log('Displays updated, closing modal...');
+        
+        // Close modal
+        closeEditModal();
+        
+        alert('Asset "' + assets[assetIndex].uniqueRef + '" has been updated successfully.');
+        console.log('Save completed successfully');
+        
+    } catch (error) {
+        console.error('Error during save:', error);
+        alert('Error saving asset: ' + error.message);
+    }
+}
+
+function saveEdit() {
+    if (!currentEditAsset) return;
+
+    var assetIndex = assets.findIndex(function(a) { return a.uniqueRef === currentEditAsset.uniqueRef; });
+    if (assetIndex !== -1) {
+        var editUniqueRef = safeGetElement('editUniqueRef');
+        var editQrCode = safeGetElement('editQrCode');
+        var editType = safeGetElement('editType');
+        var editElevation = safeGetElement('editElevation');
+        var editLength = safeGetElement('editLength');
+        var editDepth = safeGetElement('editDepth');
+        var editHeight = safeGetElement('editHeight');
+        var editWeight = safeGetElement('editWeight');
+        var editRepairStatus = safeGetElement('editRepairStatus');
+        var editNotes = safeGetElement('editNotes');
+        
+        if (editUniqueRef) assets[assetIndex].uniqueRef = editUniqueRef.value;
+        if (editQrCode) assets[assetIndex].qrCode = editQrCode.value;
+        if (editType) assets[assetIndex].type = editType.value;
+        if (editElevation) assets[assetIndex].elevation = editElevation.value;
+        if (editLength) assets[assetIndex].length = parseFloat(editLength.value) || 0;
+        if (editDepth) assets[assetIndex].depth = parseFloat(editDepth.value) || 0;
+        if (editHeight) assets[assetIndex].height = parseFloat(editHeight.value) || 0;
+        if (editWeight) assets[assetIndex].weight = parseFloat(editWeight.value) || 0;
+        if (editRepairStatus) assets[assetIndex].repairStatus = editRepairStatus.value;
+        if (editNotes) assets[assetIndex].notes = editNotes.value;
+        
+        assets[assetIndex].L = assets[assetIndex].length;
+        assets[assetIndex].B = assets[assetIndex].depth;
+        assets[assetIndex].H = assets[assetIndex].height;
+        assets[assetIndex].updatedDate = new Date();
+
+        updateTypeFilter();
+        filterAssets();
+        updateStats();
+        updateElevationMatrix();
+        
+        var editModal = safeGetElement('editModal');
+        if (editModal) editModal.classList.remove('show');
+        currentEditAsset = null;
+    }
+}
+
+function handleFileImport(event) {
+    var file = event.target.files[0];
+    if (!file) return;
+
+    console.log('File selected:', file.name);
+
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            console.log('Reading file...');
+            var csv = e.target.result;
+            var lines = csv.split('\n').filter(function(line) { return line.trim(); });
+            
+            console.log('CSV lines found:', lines.length);
+            
+            if (lines.length < 2) {
+                alert('CSV file appears to be empty or has no data rows.');
+                return;
+            }
+            
+            var separator = ',';
+            if (lines[0].includes(';') && !lines[0].includes(',')) separator = ';';
+            if (lines[0].includes('\t')) separator = '\t';
+            
+            console.log('Using separator:', separator);
+            
+            var headers = lines[0].split(separator).map(function(h) { return h.trim().toLowerCase().replace(/['"]/g, ''); });
+            console.log('Headers found:', headers);
+            
+            var data = lines.slice(1).map(function(line) {
+                var values = line.split(separator).map(function(v) { return v.trim().replace(/['"]/g, ''); });
+                var row = {};
+                headers.forEach(function(header, index) {
+                    row[header] = values[index] || '';
+                });
+                return row;
+            }).filter(function(row) { 
+                return Object.values(row).some(function(val) { return val.trim(); });
+            });
+
+            console.log('Data rows processed:', data.length);
+
+            function getColumnValue(row, possibleNames) {
+                for (var i = 0; i < possibleNames.length; i++) {
+                    var name = possibleNames[i];
+                    if (row[name] !== undefined) return row[name];
+                }
+                return '';
+            }
+
+            function parseCompletionDate(value) {
+                if (!value) return null;
+                var val = value.toString().toLowerCase();
+                if (val.includes('complete') || val.includes('done') || val === 'yes' || val === '1') {
+                    return new Date();
+                }
+                var date = new Date(value);
+                return isNaN(date.getTime()) ? null : date;
+            }
+
+            var mappedAssets = data.map(function(row, index) {
+                return {
+                    qrCode: getColumnValue(row, ['qr_code', 'qr code', 'qrcode', 'qr']) || 'QR-' + String(assets.length + index + 1).padStart(6, '0'),
+                    elevation: getColumnValue(row, ['elevation', 'level', 'floor']) || 'Millbank',
+                    uniqueRef: getColumnValue(row, ['reference', 'unique ref', 'uniqueref', 'unique_ref', 'ref', 'id']) || 'REF-' + String(assets.length + index + 1).padStart(6, '0'),
+                    type: getColumnValue(row, ['type', 'asset type', 'asset_type']) || 'Unknown',
+                    madeDate: parseCompletionDate(getColumnValue(row, ['made', 'manufactured', 'production', 'built', 'made date'])),
+                    deliveredDate: parseCompletionDate(getColumnValue(row, ['delivered', 'delivery', 'shipped', 'sent', 'delivered date'])),
+                    installedDate: parseCompletionDate(getColumnValue(row, ['installed', 'installation', 'fitted', 'placed', 'installed date'])),
+                    repairStatus: getColumnValue(row, ['repair_status', 'repair status', 'repair', 'status']) || '',
+                    length: parseFloat(getColumnValue(row, ['length', 'l', 'len'])) || 0,
+                    depth: parseFloat(getColumnValue(row, ['depth', 'b', 'breadth', 'width', 'w', 'd'])) || 0,
+                    height: parseFloat(getColumnValue(row, ['height', 'h', 'ht'])) || 0,
+                    weight: parseFloat(getColumnValue(row, ['weight(kg)', 'weight', 'kg', 'mass'])) || 0,
+                    notes: getColumnValue(row, ['notes', 'note', 'comments', 'comment', 'description']) || '',
+                    L: parseFloat(getColumnValue(row, ['length', 'l', 'len'])) || 0,
+                    B: parseFloat(getColumnValue(row, ['depth', 'b', 'breadth', 'width', 'w', 'd'])) || 0,
+                    H: parseFloat(getColumnValue(row, ['height', 'h', 'ht'])) || 0,
+                    createdDate: new Date(),
+                    updatedDate: new Date()
+                };
+            }).filter(function(asset) { return asset.uniqueRef && asset.uniqueRef.trim(); });
+
+            console.log('Mapped assets:', mappedAssets.length);
+
+            if (mappedAssets.length === 0) {
+                alert('No valid assets found in the CSV file. Please check the format.');
+                return;
+            }
+
+            assets = assets.concat(mappedAssets);
+            filteredAssets = assets.slice();
+            updateTypeFilter();
+            renderAssets();
+            updateStats();
+            updateElevationMatrix();
+            
+            var importModal = safeGetElement('importModal');
+            if (importModal) importModal.classList.remove('show');
+            alert('Successfully imported ' + mappedAssets.length + ' assets!');
+            
+        } catch (error) {
+            console.error('Import error:', error);
+            alert('Error parsing file: ' + error.message + '\n\nPlease check the file format and try again.');
+        }
+    };
+    
+    reader.onerror = function() {
+        alert('Error reading file. Please try again.');
+    };
+    
+    reader.readAsText(file);
+    event.target.value = '';
+}
+
+function setupLogoUpload() {
+    var logoContainer = safeGetElement('logoContainer');
+    var logoUpload = safeGetElement('logoUpload');
+    var logoImage = safeGetElement('logoImage');
+    var logoPlaceholder = safeGetElement('logoPlaceholder');
+    var removeLogo = safeGetElement('removeLogo');
+    
+    if (!logoContainer || !logoUpload || !logoImage || !logoPlaceholder || !removeLogo) return;
+    
+    logoContainer.addEventListener('click', function() {
+        logoUpload.click();
+    });
+    
+    logoUpload.addEventListener('change', function(e) {
+        var file = e.target.files[0];
+        if (file && file.type.startsWith('image/')) {
+            var reader = new FileReader();
+            reader.onload = function(event) {
+                logoImage.src = event.target.result;
+                logoImage.classList.remove('hidden');
+                logoPlaceholder.classList.add('hidden');
+                removeLogo.classList.remove('hidden');
+                try {
+                    localStorage.setItem('companyLogo', event.target.result);
+                } catch (e) {
+                    console.warn('Could not save logo to localStorage:', e);
+                }
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+    
+    removeLogo.addEventListener('click', function(e) {
+        e.stopPropagation();
+        logoImage.classList.add('hidden');
+        logoPlaceholder.classList.remove('hidden');
+        removeLogo.classList.add('hidden');
+        logoUpload.value = '';
+        try {
+            localStorage.removeItem('companyLogo');
+        } catch (e) {
+            console.warn('Could not remove logo from localStorage:', e);
+        }
+    });
+    
+    try {
+        var savedLogo = localStorage.getItem('companyLogo');
+        if (savedLogo) {
+            logoImage.src = savedLogo;
+            logoImage.classList.remove('hidden');
+            logoPlaceholder.classList.add('hidden');
+            removeLogo.classList.remove('hidden');
+        }
+    } catch (e) {
+        console.warn('Could not load logo from localStorage:', e);
+    }
+}
+
+function saveProjectInfo() {
+    var projectRef = safeGetElement('projectRef');
+    var projectName = safeGetElement('projectName');
+    var company = safeGetElement('company');
+    var author = safeGetElement('author');
+    
+    if (!projectRef || !projectName || !company || !author) return;
+    
+    var projectInfo = {
+        projectRef: projectRef.value,
+        projectName: projectName.value,
+        company: company.value,
+        author: author.value
+    };
+    
+    try {
+        localStorage.setItem('projectInfo', JSON.stringify(projectInfo));
+    } catch (e) {
+        console.warn('Could not save project info to localStorage:', e);
+    }
+}
+
+function loadProjectInfo() {
+    try {
+        var saved = localStorage.getItem('projectInfo');
+        if (saved) {
+            var projectInfo = JSON.parse(saved);
+            var projectRef = safeGetElement('projectRef');
+            var projectName = safeGetElement('projectName');
+            var company = safeGetElement('company');
+            var author = safeGetElement('author');
+            
+            if (projectRef) projectRef.value = projectInfo.projectRef || '';
+            if (projectName) projectName.value = projectInfo.projectName || '';
+            if (company) company.value = projectInfo.company || '';
+            if (author) author.value = projectInfo.author || '';
+        }
+    } catch (e) {
+        console.warn('Could not load project info from localStorage:', e);
+    }
+}
+
+function setupProjectInfoSave() {
+    ['projectRef', 'projectName', 'company', 'author'].forEach(function(id) {
+        var element = safeGetElement(id);
+        if (element) {
+            element.addEventListener('input', saveProjectInfo);
+        }
+    });
+}
+
+function setupEventListeners() {
+    var searchInput = safeGetElement('searchInput');
+    var typeFilter = safeGetElement('typeFilter');
+    var elevationFilter = safeGetElement('elevationFilter');
+    var statusFilter = safeGetElement('statusFilter');
+    
+    if (searchInput) searchInput.addEventListener('input', filterAssets);
+    if (typeFilter) typeFilter.addEventListener('change', filterAssets);
+    if (elevationFilter) elevationFilter.addEventListener('change', filterAssets);
+    if (statusFilter) statusFilter.addEventListener('change', filterAssets);
+
+    var fileInput = safeGetElement('fileInput');
+    if (fileInput) fileInput.addEventListener('change', handleFileImport);
+
+    var cancelSearchAsset = safeGetElement('cancelSearchAsset');
+    var assignSearchQR = safeGetElement('assignSearchQR');
+    var assetSearchInput = safeGetElement('assetSearchInput');
+    var searchQrInput = safeGetElement('searchQrInput');
+    var manualSearchQrInput = safeGetElement('manualSearchQrInput');
+    
+    if (cancelSearchAsset) {
+        cancelSearchAsset.addEventListener('click', function() {
+            var searchAssetModal = safeGetElement('searchAssetModal');
+            if (searchAssetModal) searchAssetModal.classList.remove('show');
+        });
+    }
+    if (assignSearchQR) assignSearchQR.addEventListener('click', assignQRFromSearch);
+    if (assetSearchInput) assetSearchInput.addEventListener('input', performAssetSearch);
+    if (searchQrInput) searchQrInput.addEventListener('input', updateSearchAssignButton);
+    if (manualSearchQrInput) manualSearchQrInput.addEventListener('input', updateSearchAssignButton);
+
+    var cancelQR = safeGetElement('cancelQR');
+    var assignQR = safeGetElement('assignQR');
+    var qrCodeInput = safeGetElement('qrCodeInput');
+    var manualQrInput = safeGetElement('manualQrInput');
+    var assetSelect = safeGetElement('assetSelect');
+    
+    if (cancelQR) {
+        cancelQR.addEventListener('click', function() {
+            var qrModal = safeGetElement('qrModal');
+            if (qrModal) qrModal.classList.remove('show');
+        });
+    }
+    if (assignQR) assignQR.addEventListener('click', assignQRCode);
+    if (qrCodeInput) qrCodeInput.addEventListener('input', updateCurrentAssignment);
+    if (manualQrInput) manualQrInput.addEventListener('input', updateCurrentAssignment);
+    if (assetSelect) assetSelect.addEventListener('change', updateCurrentAssignment);
+
+    var cancelImport = safeGetElement('cancelImport');
+    if (cancelImport) {
+        cancelImport.addEventListener('click', function() {
+            var importModal = safeGetElement('importModal');
+            if (importModal) importModal.classList.remove('show');
+        });
+    }
+
+    var cancelEdit = safeGetElement('cancelEdit');
+    var saveEditBtn = safeGetElement('saveEdit');
+    
+    if (cancelEdit) {
+        cancelEdit.addEventListener('click', function() {
+            var editModal = safeGetElement('editModal');
+            if (editModal) editModal.classList.remove('show');
+            currentEditAsset = null;
+        });
+    }
+    if (saveEditBtn) saveEditBtn.addEventListener('click', saveEdit);
+
+    var prevBtn = safeGetElement('prevBtn');
+    var nextBtn = safeGetElement('nextBtn');
+    
+    if (prevBtn) {
+        prevBtn.addEventListener('click', function() {
+            if (currentPage > 1) {
+                currentPage--;
+                renderAssets();
+            }
+        });
+    }
+    if (nextBtn) {
+        nextBtn.addEventListener('click', function() {
+            var totalPages = Math.ceil(filteredAssets.length / itemsPerPage);
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderAssets();
+            }
+        });
+    }
+
+    ['searchAssetModal', 'qrModal', 'importModal', 'editModal'].forEach(function(modalId) {
+        var modal = safeGetElement(modalId);
+        if (modal) {
+            modal.addEventListener('click', function(e) {
+                if (e.target.classList.contains('modal')) {
+                    modal.classList.remove('show');
+                }
+            });
+        }
+    });
+}
+
+function initApp() {
+    console.log('Initializing app...');
+    assets = generateSampleData();
+    filteredAssets = assets.slice();
+    updateTypeFilter();
+    updateStats();
+    updateElevationMatrix();
+    setupEventListeners();
+    setupLogoUpload();
+    loadProjectInfo();
+    setupProjectInfoSave();
+    console.log('App initialized successfully');
+}
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initApp);
+} else {
+    initApp();
+}
+</script>
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asset Management Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://apis.google.com/js/api.js"></script>
+    <style>
+        .page {
+            display: none;
+        }
+        .page.active {
+            display: block;
+        }
+        .progress-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid #d1d5db;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-block;
+        }
+        .progress-dot:hover {
+            border-color: #6b7280;
+            transform: scale(1.1);
+        }
+        .progress-dot.completed {
+            background-color: #10b981;
+            border-color: #059669;
+        }
+        .progress-dot.pending {
+            background-color: #e5e7eb;
+            border-color: #d1d5db;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            transition: transform 0.2s;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+        .elevation-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #3b82f6;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+            text-decoration: none;
+            min-height: 3rem;
+        }
+        .btn-large {
+            padding: 1.5rem 2rem;
+            font-size: 1.1rem;
+            min-height: 4rem;
+        }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; transform: translateY(-1px); }
+        .btn-success { background: #10b981; color: white; }
+        .btn-success:hover { background: #059669; transform: translateY(-1px); }
+        .btn-warning { background: #f59e0b; color: white; }
+        .btn-warning:hover { background: #d97706; transform: translateY(-1px); }
+        .btn-secondary { background: #6b7280; color: white; }
+        .btn-secondary:hover { background: #4b5563; transform: translateY(-1px); }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+        }
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            max-width: 600px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+        }
+        .asset-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 2fr 1fr;
+            gap: 1rem;
+            align-items: center;
+            padding: 1rem;
+            border-bottom: 1px solid #e5e7eb;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .asset-row:hover {
+            background-color: #f9fafb;
+        }
+        .asset-row.selected {
+            background-color: #fee2e2;
+            border-left: 4px solid #dc2626;
+        }
+        .delete-selected-btn {
+            position: sticky;
+            top: 20px;
+            z-index: 50;
+            margin-bottom: 20px;
+        }
+        @media (max-width: 640px) {
+            .asset-row {
+                grid-template-columns: 2fr 2fr 1fr;
+                gap: 0.5rem;
+            }
+        }
+        .back-btn {
+            position: fixed;
+            top: 1rem;
+            left: 1rem;
+            z-index: 100;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 3rem;
+            height: 3rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .back-btn:hover {
+            background: #2563eb;
+        }
+        .config-panel {
+            background: #fef3c7;
+            border: 2px solid #f59e0b;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-connected { background-color: #10b981; }
+        .status-disconnected { background-color: #ef4444; }
+        .status-loading { background-color: #f59e0b; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Back Button (hidden on front page) -->
+    <button id="backBtn" class="back-btn" onclick="showPage('front')" style="display: none;">←</button>
+
+    <!-- Front Page -->
+    <div id="frontPage" class="page active min-h-screen">
+        <!-- Google Sheets Configuration Panel -->
+        <div id="configPanel" class="config-panel max-w-6xl mx-auto mt-4 px-4">
+            <h3 class="font-bold text-amber-800 mb-2">Google Sheets Configuration</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                <div>
+                    <label class="block text-sm font-medium text-amber-700 mb-1">Google Sheets API Key:</label>
+                    <input type="password" id="apiKeyInput" placeholder="Enter your API key" 
+                           class="w-full px-3 py-2 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-amber-700 mb-1">Sheet ID:</label>
+                    <input type="text" id="sheetIdInput" placeholder="Enter Google Sheet ID" 
+                           class="w-full px-3 py-2 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500">
+                </div>
+                <div class="flex gap-2">
+                    <button onclick="connectToSheets()" class="btn btn-primary">
+                        <span id="connectionStatus" class="status-indicator status-disconnected"></span>
+                        Connect to Sheets
+                    </button>
+                    <button onclick="showSetupInstructions()" class="btn btn-secondary">Setup Help</button>
+                </div>
+            </div>
+            <div id="connectionMessage" class="mt-2 text-sm text-amber-700"></div>
+        </div>
+
+        <!-- Project Header -->
+        <div class="bg-white shadow-sm border-b">
+            <div class="max-w-6xl mx-auto px-4 py-6">
+                <!-- Project Title Block -->
+                <div class="flex flex-col lg:flex-row justify-between items-start mb-6">
+                    <div class="flex-1 mb-4 lg:mb-0">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Project Ref:</label>
+                                <input type="text" id="projectRef" placeholder="Enter project reference" 
+                                       class="w-full text-sm px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Project Name:</label>
+                                <input type="text" id="projectName" placeholder="Enter project name" 
+                                       class="w-full text-sm px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Company:</label>
+                                <input type="text" id="company" placeholder="Enter company name" 
+                                       class="w-full text-sm px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-gray-500 mb-1">Author:</label>
+                                <input type="text" id="author" placeholder="Enter author name" 
+                                       class="w-full text-sm px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Logo Upload Area -->
+                    <div class="lg:ml-6">
+                        <div class="text-center">
+                            <div id="logoContainer" class="w-16 h-16 lg:w-32 lg:h-20 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center cursor-pointer hover:border-gray-400 transition-colors">
+                                <div id="logoPlaceholder" class="text-gray-400 text-xs lg:text-sm text-center leading-tight">
+                                    Click to<br>upload<br>logo
+                                </div>
+                                <img id="logoImage" class="w-full h-full object-contain rounded-lg hidden" alt="Company Logo">
+                            </div>
+                            <input type="file" id="logoUpload" accept="image/*" class="hidden">
+                            <button id="removeLogo" class="text-xs text-red-500 mt-1 hidden hover:text-red-700">Remove</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Main Title -->
+                <div class="text-center">
+                    <h1 class="text-3xl lg:text-4xl font-bold text-gray-900 mb-2">Asset Management Dashboard</h1>
+                    <p class="text-gray-600">Track manufacturing and installation progress</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="max-w-6xl mx-auto px-4 py-8">
+            <!-- Overall Statistics -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <div class="stat-card">
+                    <div class="text-4xl font-bold" id="totalAssets">0</div>
+                    <div class="text-lg opacity-90">Total Assets</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                    <div class="text-4xl font-bold" id="madeCount">0</div>
+                    <div class="text-lg opacity-90">Made</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">
+                    <div class="text-4xl font-bold" id="deliveredCount">0</div>
+                    <div class="text-lg opacity-90">Delivered</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);">
+                    <div class="text-4xl font-bold" id="installedCount">0</div>
+                    <div class="text-lg opacity-90">Installed</div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="card mb-8">
+                <h2 class="text-2xl font-bold text-gray-900 mb-6 text-center">Quick Actions</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                    <button onclick="openAssetSearchModal()" class="btn btn-primary btn-large">
+                        🔍<br><span class="text-sm">Search Asset</span>
+                    </button>
+                    <button onclick="openQRModal()" class="btn btn-primary btn-large">
+                        🏷️<br><span class="text-sm">Add QR Code</span>
+                    </button>
+                    <button onclick="syncWithSheets()" class="btn btn-primary btn-large">
+                        🔄<br><span class="text-sm">Sync Data</span>
+                    </button>
+                    <button onclick="addNewAsset()" class="btn btn-success btn-large">
+                        ➕<br><span class="text-sm">Add Asset</span>
+                    </button>
+                    <button onclick="exportToCSV()" class="btn btn-warning btn-large">
+                        💾<br><span class="text-sm">Export Data</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Progress by Elevation Matrix -->
+            <div class="card">
+                <h2 class="text-2xl font-bold text-gray-900 mb-6">Progress Matrix by Elevation</h2>
+                
+                <div class="overflow-x-auto">
+                    <table class="w-full border-collapse">
+                        <thead>
+                            <tr class="bg-gray-100">
+                                <th class="text-left p-4 font-semibold border-b">Elevation</th>
+                                <th class="text-center p-4 font-semibold border-b">Total</th>
+                                <th class="text-center p-4 font-semibold border-b text-green-600">Made</th>
+                                <th class="text-center p-4 font-semibold border-b text-green-600">Made %</th>
+                                <th class="text-center p-4 font-semibold border-b text-orange-600">Delivered</th>
+                                <th class="text-center p-4 font-semibold border-b text-orange-600">Delivered %</th>
+                                <th class="text-center p-4 font-semibold border-b text-purple-600">Installed</th>
+                                <th class="text-center p-4 font-semibold border-b text-purple-600">Installed %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="elevationMatrix">
+                            <!-- Matrix rows will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="mt-6 text-center">
+                    <button onclick="showPage('assets')" class="btn btn-primary">
+                        📋 View Detailed Asset List
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Assets List Page -->
+    <div id="assetsPage" class="page min-h-screen">
+        <div class="max-w-7xl mx-auto px-4 py-6">
+            <!-- Page Header -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h1 class="text-2xl font-bold text-gray-900">Asset List</h1>
+                    <div class="flex gap-2">
+                        <button onclick="openAssetSearchModal()" class="btn btn-primary text-sm">🔍 Search</button>
+                        <button onclick="openQRModal()" class="btn btn-primary text-sm">🏷️ QR</button>
+                        <button onclick="addNewAsset()" class="btn btn-success text-sm">➕ Add</button>
+                        <button onclick="exportToCSV()" class="btn btn-warning text-sm">💾 Export</button>
+                    </div>
+                </div>
+                <div class="text-gray-600">
+                    Showing <span id="filteredCount">0</span> of <span id="totalCount">0</span> assets
+                </div>
+            </div>
+
+            <!-- Filters -->
+            <div class="card mb-6">
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <input 
+                        type="text" 
+                        id="searchInput"
+                        placeholder="Search assets..."
+                        class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                    >
+                    <select id="typeFilter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                        <option value="">All Types</option>
+                    </select>
+                    <select id="elevationFilter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                        <option value="">All Elevations</option>
+                        <option value="Millbank">Millbank</option>
+                        <option value="Dean_Stanley">Dean_Stanley</option>
+                        <option value="Smith_Square">Smith_Square</option>
+                    </select>
+                    <select id="statusFilter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                        <option value="">All Status</option>
+                        <option value="complete">Fully Complete</option>
+                        <option value="partial">Partially Complete</option>
+                        <option value="pending">Not Started</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Asset List -->
+            <div class="card">
+                <!-- Delete Selected Button -->
+                <div id="deleteSelectedContainer" class="delete-selected-btn" style="display: none;">
+                    <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <h3 class="text-red-800 font-semibold">Selected Asset:</h3>
+                                <p id="selectedAssetInfo" class="text-red-700 text-sm"></p>
+                            </div>
+                            <div class="flex gap-3">
+                                <button onclick="clearSelection()" class="px-4 py-2 border border-red-300 text-red-700 rounded-lg hover:bg-red-100">
+                                    Cancel
+                                </button>
+                                <button onclick="deleteSelectedAsset()" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">
+                                    Delete Asset
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="asset-row font-semibold bg-gray-50 border-b-2">
+                    <div>Asset Details</div>
+                    <div class="text-center hidden sm:block">Dimensions</div>
+                    <div class="text-center">Progress</div>
+                    <div class="text-center">Actions</div>
+                </div>
+                
+                <div id="assetList">
+                    <!-- Assets will be rendered here -->
+                </div>
+            </div>
+
+            <!-- Pagination -->
+            <div id="pagination" class="flex justify-center items-center gap-4 mt-6">
+                <button id="prevBtn" class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">Previous</button>
+                <span id="pageInfo" class="text-gray-600">Page 1 of 1</span>
+                <button id="nextBtn" class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">Next</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Asset Search Modal -->
+    <div id="searchAssetModal" class="modal">
+        <div class="modal-content">
+            <div class="p-6">
+                <h2 class="text-xl font-bold mb-4">Search Asset & Add QR Code</h2>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Search for Asset:</label>
+                    <input 
+                        type="text" 
+                        id="assetSearchInput" 
+                        placeholder="Type asset reference, type, or QR code..."
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg"
+                    >
+                </div>
+
+                <div id="searchResults" class="mb-4 max-h-60 overflow-y-auto border border-gray-200 rounded-lg hidden">
+                    <!-- Results will appear here -->
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">QR Code to Assign:</label>
+                    <div class="flex gap-2">
+                        <input 
+                            type="text" 
+                            id="searchQrInput" 
+                            placeholder="QR code will appear here after scanning..."
+                            class="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg"
+                            readonly
+                        >
+                        <button 
+                            class="btn btn-primary px-6 py-3 text-sm whitespace-nowrap"
+                            onclick="startSearchQRScan()"
+                        >
+                            📱 Scan QR
+                        </button>
+                    </div>
+                    <div class="mt-2">
+                        <input 
+                            type="text" 
+                            id="manualSearchQrInput" 
+                            placeholder="Or type QR code manually..."
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                        >
+                    </div>
+                </div>
+
+                <div id="selectedAssetDisplay" class="mb-4 p-4 bg-blue-50 rounded-lg hidden">
+                    <h3 class="font-semibold text-blue-800 mb-2">Selected Asset:</h3>
+                    <div id="selectedAssetDetails" class="text-blue-700 text-sm"></div>
+                </div>
+                
+                <div class="flex justify-end gap-3">
+                    <button id="cancelSearchAsset" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+                    <button id="assignSearchQR" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50" disabled>Assign QR Code</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR Code Assignment Modal -->
+    <div id="qrModal" class="modal">
+        <div class="modal-content">
+            <div class="p-6">
+                <h2 class="text-xl font-bold mb-4">Add Pre-printed QR Code to Asset</h2>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">QR Code:</label>
+                    <div class="flex gap-2">
+                        <input 
+                            type="text" 
+                            id="qrCodeInput" 
+                            placeholder="QR code will appear here after scanning..."
+                            class="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg"
+                            readonly
+                        >
+                        <button 
+                            id="scanBtn" 
+                            class="btn btn-primary px-6 py-3 text-sm whitespace-nowrap"
+                            onclick="startQRScan()"
+                        >
+                            📱 Scan QR
+                        </button>
+                    </div>
+                    <p class="text-sm text-gray-500 mt-2">
+                        Tap "Scan QR" button to use your iPhone camera to scan QR codes
+                    </p>
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Or enter manually:</label>
+                    <input 
+                        type="text" 
+                        id="manualQrInput" 
+                        placeholder="Type QR code manually if needed..."
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-lg"
+                    >
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Select Asset:</label>
+                    <select id="assetSelect" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                        <option value="">Choose an asset...</option>
+                    </select>
+                </div>
+
+                <div id="currentAssignment" class="mb-6 p-4 bg-gray-50 rounded-lg hidden">
+                    <h3 class="font-semibold text-gray-700 mb-2">Assignment Preview:</h3>
+                    <div id="assignmentDetails" class="text-sm text-gray-600"></div>
+                </div>
+                
+                <div class="flex justify-end gap-3">
+                    <button id="cancelQR" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+                    <button id="assignQR" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Assign QR Code</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Modal -->
+    <div id="importModal" class="modal">
+        <div class="modal-content">
+            <div class="p-6">
+                <h2 class="text-xl font-bold mb-4">Import from Google Sheets</h2>
+                
+                <div class="mb-4 p-4 bg-blue-50 rounded-lg">
+                    <h3 class="font-semibold text-blue-800 mb-2">Required Columns (in this order):</h3>
+                    <div class="text-sm text-blue-700 font-mono bg-white p-2 rounded">
+                        QR_Code | Elevation | Reference | Made | Delivered | Installed | Repair_status | Length | Depth | Height | Weight(kg) | Notes
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <h3 class="font-semibold mb-2">Steps:</h3>
+                    <ol class="text-sm text-gray-600 space-y-1 list-decimal list-inside">
+                        <li>In Google Sheets: File → Download → CSV</li>
+                        <li>Upload the CSV file below</li>
+                        <li>Use "completed", "yes", or "1" for finished items</li>
+                        <li>Date format: DD/MM/YYYY or leave blank for incomplete</li>
+                        <li>Weight in kg, dimensions in cm</li>
+                    </ol>
+                </div>
+
+                <input type="file" id="fileInput" accept=".csv" class="w-full mb-4 p-3 border border-gray-300 rounded-lg">
+                
+                <div class="flex justify-end gap-3">
+                    <button id="cancelImport" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div id="editModal" class="modal">
+        <div class="modal-content">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold">Edit Asset</h2>
+                    <div id="editingAssetInfo" class="text-sm text-gray-600 bg-blue-50 px-3 py-1 rounded-lg">
+                        Editing: <span id="editingAssetRef" class="font-medium text-blue-700"></span>
+                    </div>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-4 mb-6">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Reference</label>
+                        <input type="text" id="editUniqueRef" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">QR Code</label>
+                        <input type="text" id="editQrCode" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                        <input type="text" id="editType" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Elevation</label>
+                        <select id="editElevation" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <option value="Millbank">Millbank</option>
+                            <option value="Dean_Stanley">Dean_Stanley</option>
+                            <option value="Smith_Square">Smith_Square</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Length (cm)</label>
+                        <input type="number" id="editLength" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Depth (cm)</label>
+                        <input type="number" id="editDepth" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Height (cm)</label>
+                        <input type="number" id="editHeight" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Weight (kg)</label>
+                        <input type="number" id="editWeight" step="0.1" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Repair Status</label>
+                        <select id="editRepairStatus" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <option value="">None</option>
+                            <option value="Required">Required</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Completed">Completed</option>
+                        </select>
+                    </div>
+                    <div class="col-span-2">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                        <textarea id="editNotes" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500" placeholder="Additional notes..."></textarea>
+                    </div>
+                </div>
+
+                <div class="mb-6 p-4 bg-gray-50 rounded-lg">
+                    <h3 class="font-semibold mb-2">Completion Dates</h3>
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                            <span class="font-medium">Made:</span>
+                            <div id="editMadeDate" class="text-gray-600">
